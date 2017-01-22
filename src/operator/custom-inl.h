@@ -16,6 +16,11 @@
 #include <string>
 #include <utility>
 #include <sstream>
+#include <thread>
+#include <mutex>
+#include <functional>
+#include <condition_variable>
+#include <queue>
 #include "./operator_common.h"
 
 namespace mxnet {
@@ -29,7 +34,39 @@ struct CustomOpParam {
 template<typename xpu>
 class CustomOp : public Operator {
  public:
-  explicit CustomOp(CustomOpInfo op_info) : op_info_(op_info) {}
+  explicit CustomOp(CustomOpInfo* op_info) {
+    op_info_.reset(op_info, [](CustomOpInfo *ptr){
+        ptr->del(ptr->p_del);
+        delete ptr;
+      });
+    if (std::string("NaiveEngine") == dmlc::GetEnv("MXNET_ENGINE_TYPE", std::string())) {
+      sync_mode_ = true;
+    } else {
+      sync_mode_ = false;
+      destructing_ = false;
+      worker_ = std::thread([&]() {
+          std::unique_lock<std::mutex> lock(mtx_);
+          while (!q_.empty() || !destructing_) {
+            cv_.wait(lock, [&] {return !q_.empty() || destructing_;});
+            while (!q_.empty()) {
+              q_.front()();
+              q_.pop();
+            }
+          }
+        });
+    }
+  }
+
+  ~CustomOp() {
+    if (!sync_mode_) {
+      {
+        std::unique_lock<std::mutex> lock(mtx_);
+        destructing_ = true;
+        cv_.notify_all();
+      }
+      worker_.join();
+    }
+  }
 
   virtual void Forward(const OpContext &ctx,
                        const std::vector<TBlob> &in_data,
@@ -51,13 +88,18 @@ class CustomOp : public Operator {
 
  private:
   Context get_ctx();
-  CustomOpInfo op_info_;
+  std::shared_ptr<CustomOpInfo> op_info_;
+  std::mutex mtx_;
+  std::condition_variable cv_;
+  std::thread worker_;
+  std::queue<std::function<void(void)> > q_;
+  bool destructing_;
+  bool sync_mode_;
 };  // CustomOp
 
 template<typename xpu>
-Operator* CreateOp(CustomOpInfo op_info);
+Operator* CreateOp(CustomOpInfo *op_info);
 
-#if DMLC_USE_CXX11
 class CustomOpProp : public OperatorProperty {
  public:
   static void Register(const std::string &op_type, CustomOpPropCreator creator) {
@@ -82,10 +124,11 @@ class CustomOpProp : public OperatorProperty {
       }
     }
     CHECK_NE(param_.op_type, "") << "Custom operator type missing";
-    CHECK_NE(registry_.find(param_.op_type), registry_.end())
+    CHECK(registry_.find(param_.op_type) != registry_.end())
       << "Cannot find custom operator type " << param_.op_type;
     CustomOpPropCreator creator = registry_[param_.op_type];
-    CHECK(creator(param_.op_type.c_str(), keys.size(), keys.data(), vals.data(), &info_));
+    info_.reset(new CustomOpPropInfo, [](CustomOpPropInfo* ptr){ptr->del(ptr->p_del);});
+    CHECK(creator(param_.op_type.c_str(), keys.size(), keys.data(), vals.data(), info_.get()));
     num_inputs_ = ListArguments().size();
     num_outputs_ = ListOutputs().size();
     num_auxs_ = ListAuxiliaryStates().size();
@@ -93,7 +136,7 @@ class CustomOpProp : public OperatorProperty {
 
   std::vector<std::string> ListArguments() const override {
     char ** args = NULL;
-    CHECK(info_.list_arguments(&args));
+    CHECK(info_->list_arguments(&args, info_->p_list_arguments));
     std::vector<std::string> ret;
     for (int i = 0; args[i] != NULL; ++i) {
       ret.push_back(args[i]);
@@ -103,7 +146,7 @@ class CustomOpProp : public OperatorProperty {
 
   std::vector<std::string> ListOutputs() const override {
     char ** args = NULL;
-    CHECK(info_.list_outputs(&args));
+    CHECK(info_->list_outputs(&args, info_->p_list_outputs));
     std::vector<std::string> ret;
     for (int i = 0; args[i] != NULL; ++i) {
       ret.push_back(args[i]);
@@ -113,7 +156,7 @@ class CustomOpProp : public OperatorProperty {
 
   std::vector<std::string> ListAuxiliaryStates() const override {
     char ** args = NULL;
-    CHECK(info_.list_auxiliary_states(&args));
+    CHECK(info_->list_auxiliary_states(&args, info_->p_list_auxiliary_states));
     std::vector<std::string> ret;
     for (int i = 0; args[i] != NULL; ++i) {
       ret.push_back(args[i]);
@@ -141,7 +184,7 @@ class CustomOpProp : public OperatorProperty {
     }
     shapes.resize(num_inputs_+num_outputs_+num_auxs_);
     ndims.resize(num_inputs_+num_outputs_+num_auxs_);
-    CHECK(info_.infer_shape(shapes.size(), ndims.data(), shapes.data()));
+    CHECK(info_->infer_shape(shapes.size(), ndims.data(), shapes.data(), info_->p_infer_shape));
     for (unsigned i = 0; i < in_shape->size(); ++i) {
       SHAPE_ASSIGN_CHECK(*in_shape, i, TShape(shapes[i], shapes[i]+ndims[i]));
     }
@@ -172,8 +215,9 @@ class CustomOpProp : public OperatorProperty {
     const std::vector<int> &out_data) const override {
     int num_dep;
     int *rdeps;
-    CHECK(info_.declare_backward_dependency(out_grad.data(), in_data.data(),
-                                            out_data.data(), &num_dep, &rdeps));
+    CHECK(info_->declare_backward_dependency(out_grad.data(), in_data.data(),
+                                             out_data.data(), &num_dep, &rdeps,
+                                             info_->p_declare_backward_dependency));
     std::vector<int> deps;
     deps.insert(deps.end(), rdeps, rdeps+num_dep);
     return deps;
@@ -198,12 +242,11 @@ class CustomOpProp : public OperatorProperty {
  private:
   static std::map<std::string, CustomOpPropCreator> registry_;
 
-  CustomOpPropInfo info_;
   CustomOpParam param_;
+  std::shared_ptr<CustomOpPropInfo> info_;
   std::vector<std::pair<std::string, std::string> > kwargs_;
   unsigned num_inputs_, num_outputs_, num_auxs_;
 };  // class CustomOpProp
-#endif  // DMLC_USE_CXX11
 }  // namespace op
 }  // namespace mxnet
 #endif  // MXNET_OPERATOR_CUSTOM_INL_H_

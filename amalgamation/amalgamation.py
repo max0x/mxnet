@@ -7,41 +7,51 @@ blacklist = [
     'glog/logging.h', 'io/azure_filesys.h', 'io/hdfs_filesys.h', 'io/s3_filesys.h',
     'kvstore_dist.h', 'mach/clock.h', 'mach/mach.h',
     'malloc.h', 'mkl.h', 'mkl_cblas.h', 'mkl_vsl.h', 'mkl_vsl_functions.h',
-    'nvml.h', 'opencv2/opencv.hpp', 'sys/stat.h', 'sys/types.h', 'cuda.h', 'cuda_fp16.h'
+    'nvml.h', 'opencv2/opencv.hpp', 'sys/stat.h', 'sys/types.h', 'cuda.h', 'cuda_fp16.h',
+    'omp.h'
     ]
 
-if len(sys.argv) < 4:
-    print("Usage: <source.d> <source.cc> <output> [minumum=0]\n"
-          "Minimum means no blas, no sse, no dependency, may run twice slower.")
-    exit(0)
+minimum = int(sys.argv[6]) if len(sys.argv) > 5 else 0
+android = int(sys.argv[7]) if len(sys.argv) > 6 else 0
 
-minimum = int(sys.argv[4]) if len(sys.argv) > 4 else 0
-
-if minimum:
-    blacklist += ['packet/sse-inl.h', 'emmintrin.h']
+def pprint(lst):
+    for item in lst:
+        print item
 
 def get_sources(def_file):
     sources = []
     files = []
     visited = set()
+    mxnet_path = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir))
     for line in open(def_file):
         files = files + line.strip().split(' ')
 
     for f in files:
         f = f.strip()
-        if not f or f.endswith('.o') or f == '\\': continue
+        if not f or f.endswith('.o:') or f == '\\': continue
         fn = os.path.relpath(f)
-        if fn.find('/usr/') < 0 and fn not in visited:
+        if fn.startswith("../nnvm/include/dmlc/"):
+            name = fn.split('/')[-1]
+            fn = "../dmlc-core/include/dmlc/" + name
+        if os.path.abspath(f).startswith(mxnet_path) and fn not in visited:
             sources.append(fn)
             visited.add(fn)
     return sources
 
 sources = get_sources(sys.argv[1])
 
-def find_source(name, start):
+
+def find_source(name, start, stage):
     candidates = []
     for x in sources:
-        if x == name or x.endswith('/' + name): candidates.append(x)
+        if x == name:
+            candidates.append(x)
+        elif name.endswith(".cc") and x.endswith('/' + name):
+            if x.startswith("../" + stage):
+                candidates.append(x)
+        elif x.endswith('/' + name):
+            candidates.append(x)
+        #if x == name or x.endswith('/' + name): candidates.append(x)
     if not candidates: return ''
     if len(candidates) == 1: return candidates[0]
     for x in candidates:
@@ -56,7 +66,8 @@ sysheaders = []
 history = set([])
 out = StringIO.StringIO()
 
-def expand(x, pending):
+
+def expand(x, pending, stage):
     if x in history and x not in ['mshadow/mshadow/expr_scalar-inl.h']: # MULTIPLE includes
         return
 
@@ -64,7 +75,7 @@ def expand(x, pending):
         #print 'loop found: %s in ' % x, pending
         return
 
-    print >>out, "//===== EXPANDIND: %s =====\n" %x
+    print >>out, "//===== EXPANDING: %s =====\n" %x
     for line in open(x):
         if line.find('#include') < 0:
             out.write(line)
@@ -78,18 +89,24 @@ def expand(x, pending):
             print line + ' not found'
             continue
         h = m.groups()[0].strip('./')
-        source = find_source(h, x)
+        source = find_source(h, x, stage)
         if not source:
-            if h not in blacklist and h not in sysheaders: sysheaders.append(h)
+            if (h not in blacklist and
+                h not in sysheaders and
+                'mkl' not in h and
+                'nnpack' not in h): sysheaders.append(h)
         else:
-            expand(source, pending + [x])
+            expand(source, pending + [x], stage)
     print >>out, "//===== EXPANDED: %s =====\n" %x
     history.add(x)
 
+expand(sys.argv[2], [], "dmlc")
+expand(sys.argv[3], [], "nnvm")
+expand(sys.argv[4], [], "src")
 
-expand(sys.argv[2], [])
 
-f = open(sys.argv[3], 'wb')
+
+f = open(sys.argv[5], 'wb')
 
 if minimum != 0:
     print >>f, "#define MSHADOW_STAND_ALONE 1"
@@ -113,6 +130,9 @@ print >>f, '''
 #endif
 '''
 
+if minimum != 0 and android != 0 and 'complex.h' not in sysheaders:
+    sysheaders.append('complex.h')
+
 for k in sorted(sysheaders):
     print >>f, "#include <%s>" % k
 
@@ -122,4 +142,5 @@ print >>f, out.getvalue()
 for x in sources:
     if x not in history and not x.endswith('.o'):
         print 'Not processed:', x
+
 

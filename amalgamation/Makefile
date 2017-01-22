@@ -1,14 +1,14 @@
 export MXNET_ROOT=`pwd`/..
 # Change this to path of openblas
-export OPENBLAS_ROOT=`pwd`/OpenBLAS
+export OPENBLAS_ROOT=/usr/local/opt/openblas
 
 # Whether use minimum build without blas and SSE, this will make the library super slow
 ifndef MIN
-	export MIN= 0
+	export MIN=0
 endif
 
 ifndef ANDROID
-        export ANDROID=0
+    export ANDROID=0
 endif
 
 
@@ -17,22 +17,36 @@ endif
 
 CFLAGS=-std=c++11 -Wno-unknown-pragmas -Wall
 ifneq ($(MIN), 1)
-	CFLAGS+= -I${OPENBLAS_ROOT}
-	LDFLAGS+=-L${OPENBLAS_ROOT} -lopenblas
+	CFLAGS += -I${OPENBLAS_ROOT} -I${OPENBLAS_ROOT}/include
+	LDFLAGS+= -L${OPENBLAS_ROOT} -L${OPENBLAS_ROOT}/lib -lopenblas
 endif
 
 
 all: android libmxnet_predict.a ${MXNET_ROOT}/lib/libmxnet_predict.so
 
-mxnet_predict0.d: mxnet_predict0.cc
+nnvm.d:
+	./prep_nnvm.sh
+
+dmlc.d: dmlc-minimum0.cc
+	${CXX} ${CFLAGS} -MD -MF $@ \
+	-I ${MXNET_ROOT}/dmlc-core/include \
+	-D__MIN__=$(MIN) -c $+
+	rm dmlc-minimum0.o
+
+
+mxnet_predict0.d: mxnet_predict0.cc nnvm.d dmlc.d
 	${CXX} ${CFLAGS} -MD -MF $@ \
 	-I ${MXNET_ROOT}/ -I ${MXNET_ROOT}/mshadow/ -I ${MXNET_ROOT}/dmlc-core/include \
-	-I ${MXNET_ROOT}/include -c $+
+	-I ${MXNET_ROOT}/nnvm/include \
+	-I ${MXNET_ROOT}/include \
+	-D__MIN__=$(MIN) -c mxnet_predict0.cc
+	cat dmlc.d >> mxnet_predict0.d
+	cat nnvm.d >> mxnet_predict0.d
 	rm mxnet_predict0.o
 
-mxnet_predict-all.cc:  mxnet_predict0.d mxnet_predict0.cc
+mxnet_predict-all.cc:  mxnet_predict0.d dmlc-minimum0.cc nnvm.cc mxnet_predict0.cc
 	@echo "Generating amalgamation to " $@
-	python ./amalgamation.py $+ $@ $(MIN)
+	python ./amalgamation.py $+ $@ $(MIN) $(ANDROID)
 
 mxnet_predict-all.o: mxnet_predict-all.cc
 	${CXX} ${CFLAGS} -fPIC -o $@ -c $+
@@ -56,7 +70,9 @@ else
 endif
 
 libmxnet_predict.js: mxnet_predict-all.cc
-	emcc -std=c++11 -O2 -D__MXNET_JS__  -o $@ $+ -s EXPORTED_FUNCTIONS="['_MXPredCreate', '_MXPredGetOutputShape', '_MXPredSetInput', '_MXPredForward', '_MXPredPartialForward', '_MXPredGetOutput', '_MXPredFree', '_MXNDListCreate', '_MXNDListGet', '_MXNDListFree']" -s ALLOW_MEMORY_GROWTH=1
+	emcc -std=c++11 -O2 -D__MXNET_JS__  -o $@ $+ \
+	-s EXPORTED_FUNCTIONS="['_MXPredCreate', '_MXPredGetOutputShape', '_MXPredSetInput', '_MXPredForward', '_MXPredPartialForward', '_MXPredGetOutput', '_MXPredFree', '_MXNDListCreate', '_MXNDListGet', '_MXNDListFree']" \
+	-s ALLOW_MEMORY_GROWTH=1
 
 
 ${MXNET_ROOT}/lib/libmxnet_predict.so:  mxnet_predict-all.o
@@ -65,4 +81,4 @@ ${MXNET_ROOT}/lib/libmxnet_predict.so:  mxnet_predict-all.o
 	ls -alh $@
 
 clean:
-	rm -f *.d *.o
+	rm -f *.d *.o *.so *.a mxnet_predict-all.cc nnvm.cc
