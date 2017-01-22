@@ -60,8 +60,10 @@ endif
 
 # setup opencv
 ifeq ($(USE_OPENCV), 1)
-	CFLAGS += -DMXNET_USE_OPENCV=1 $(shell pkg-config --cflags opencv)
-	LDFLAGS += $(shell pkg-config --libs opencv)
+	#CFLAGS += -DMXNET_USE_OPENCV=1 $(shell pkg-config --cflags opencv)
+	#LDFLAGS += $(shell pkg-config --libs opencv)
+	CFLAGS += -DMXNET_USE_OPENCV=1 -I$(HOME)/anaconda3/include/
+	LDFLAGS += -L$(HOME)/anaconda3/lib -lopencv_imgproc -lopencv_imgcodecs -lopencv_core
 	BIN += bin/im2rec
 else
 	CFLAGS+= -DMXNET_USE_OPENCV=0
