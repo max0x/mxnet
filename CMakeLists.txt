@@ -38,6 +38,31 @@ else(MSVC)
   set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS}")
 endif(MSVC)
 
+if(EXISTS ${PROJECT_SOURCE_DIR}/mshadow/cmake)
+  include(mshadow/cmake/mshadow.cmake)
+  include(mshadow/cmake/Utils.cmake)
+  include(mshadow/cmake/Cuda.cmake)
+else()
+  include(mshadowUtils)
+  include(Cuda)
+  include(mshadow)
+endif()
+
+foreach(var ${C_CXX_INCLUDE_DIRECTORIES})
+ 	include_directories(${var})
+endforeach()
+
+set(mxnet_LINKER_LIBS "")
+set(mxnet_LINKER_LIBS_DEBUG "")
+set(mxnet_LINKER_LIBS_RELEASE "")
+list(APPEND mxnet_LINKER_LIBS ${mshadow_LINKER_LIBS})
+
+include_directories("include")
+include_directories("mshadow")
+include_directories("cub")
+include_directories("nnvm/include")
+include_directories("dmlc-core/include")
+
 if(USE_OPENCV)
   find_package(OpenCV QUIET COMPONENTS core highgui imgproc imgcodecs)
   if(NOT OpenCV_FOUND) # if not OpenCV 3.x, then imgcodecs are not found
@@ -85,6 +110,7 @@ mxnet_source_group("Include\\io"   GLOB "src/io/*.h")
 mxnet_source_group("Include\\kvstore"   GLOB "src/kvstore/*.h")
 mxnet_source_group("Include\\ndarray"   GLOB "src/ndarray/*.h")
 mxnet_source_group("Include\\operator"   GLOB "src/operator/*.h")
+mxnet_source_group("Include\\operator\\tensor"   GLOB "src/operator/tensor/*.h")
 mxnet_source_group("Include\\optimizer"   GLOB "src/optimizer/*.h")
 mxnet_source_group("Include\\resource.cc"   GLOB "src/resource.cc/*.h")
 mxnet_source_group("Include\\storage"   GLOB "src/storage/*.h")
@@ -97,6 +123,8 @@ mxnet_source_group("Cuda\\io"   GLOB "src/io/*.cu")
 mxnet_source_group("Cuda\\kvstore"   GLOB "src/kvstore/*.cu")
 mxnet_source_group("Cuda\\ndarray"   GLOB "src/ndarray/*.cu")
 mxnet_source_group("Cuda\\operator"   GLOB "src/operator/*.cu")
+
+mxnet_source_group("Cuda\\operator\\tensor"   GLOB "src/operator/tensor/*.cu"  "src/operator/tensor/*.cuh")
 mxnet_source_group("Cuda\\optimizer"   GLOB "src/optimizer/*.cu")
 mxnet_source_group("Cuda\\resource.cc"   GLOB "src/resource.cc/*.cu")
 mxnet_source_group("Cuda\\storage"   GLOB "src/storage/*.cu")
@@ -115,8 +143,37 @@ mxnet_source_group("Source\\resource.cc"   GLOB "src/resource.cc/*.cc")
 mxnet_source_group("Source\\storage"   GLOB "src/storage/*.cc")
 mxnet_source_group("Source\\symbol"   GLOB "src/symbol/*.cc")
 
+mxnet_source_group("Source\\executor"   GLOB "src/executor/*.cc")
+mxnet_source_group("Source\\nnvm"   GLOB "src/nnvm/*.cc")
 
 
+FILE(GLOB_RECURSE SOURCE "src/*.cc" "src/*.h")
+FILE(GLOB_RECURSE CUDA "src/*.cu" "src/*.cuh")
+
+# add nnvm to source
+
+mxnet_source_group("NNVM\\Include\\c_api"   GLOB "nnvm/src/c_api/*.h")
+mxnet_source_group("NNVM\\Include\\core"   GLOB "nnvm/src/core/*.h")
+mxnet_source_group("NNVM\\Include\\pass"   GLOB "nnvm/src/pass/*.h")
+mxnet_source_group("NNVM\\Include\\nnvm"   GLOB "nnvm/include/nnvm/*.h")
+mxnet_source_group("NNVM\\Include\\dmlc"   GLOB "nnvm/include/dmlc/*.h")
+
+mxnet_source_group("NNVM\\Source"   GLOB "nnvm/src/*.cc")
+mxnet_source_group("NNVM\\Source\\c_api"   GLOB "nnvm/src/c_api/*.cc")
+mxnet_source_group("NNVM\\Source\\core"   GLOB "nnvm/src/core/*.cc")
+mxnet_source_group("NNVM\\Source\\pass"   GLOB "nnvm/src/pass/*.cc")
+
+
+# add mshadow file
+mxnet_source_group("mshadow\\Include"   GLOB "mshadow/mshadow/*.h")
+mxnet_source_group("mshadow\\Include\\cuda"   GLOB "mshadow/mshadow/cuda/*.h" "mshadow/mshadow/cuda/*.cuh")
+mxnet_source_group("mshadow\\Include\\extension"   GLOB "mshadow/mshadow/extension/*.h")
+mxnet_source_group("mshadow\\Include\\packet"   GLOB "mshadow/mshadow/packet/*.h")
+
+FILE(GLOB_RECURSE MSHADOWSOURCE "mshadow/mshadow/*.h")
+FILE(GLOB_RECURSE MSHADOW_CUDASOURCE "mshadow/mshadow/*.cuh")
+list(APPEND SOURCE ${MSHADOWSOURCE})
+list(APPEND CUDA ${MSHADOW_CUDASOURCE})
 
 
 FILE(GLOB_RECURSE SOURCE "src/*.cc" "src/*.h")
